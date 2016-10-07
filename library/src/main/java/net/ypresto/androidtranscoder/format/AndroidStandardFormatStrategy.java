@@ -43,7 +43,7 @@ public class AndroidStandardFormatStrategy implements MediaFormatStrategy {
             this.bitrate = bitrate * 1000;
             this.frameRate = frameRate;
             this.audioChannels = audioChannels;
-            this.audioBitrate = audioBitrate;
+            this.audioBitrate = audioBitrate * 1000;
         }
     }
 
