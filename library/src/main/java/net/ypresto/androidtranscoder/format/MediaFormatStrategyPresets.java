@@ -44,6 +44,10 @@ public class MediaFormatStrategyPresets {
         return new AndroidStandardFormatStrategy(encoding);
     }
 
+    public static MediaFormatStrategy createPreserveAspectRatioStrategy(AndroidStandardFormatStrategy.Encoding encoding) {
+        return new AspectRatioFormatStrategy(encoding);
+    }
+
     private MediaFormatStrategyPresets() {
     }
 }

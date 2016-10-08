@@ -21,7 +21,7 @@ public class AudioTrackTranscoder implements TrackTranscoder {
     private long mWrittenPresentationTimeUs;
 
     private final int mTrackIndex;
-    private final MediaFormat mInputFormat;
+    private MediaFormat mInputFormat;
     private final MediaFormat mOutputFormat;
 
     private final MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
@@ -47,21 +47,30 @@ public class AudioTrackTranscoder implements TrackTranscoder {
         mOutputFormat = outputFormat;
         mMuxer = muxer;
 
-        mInputFormat = mExtractor.getTrackFormat(mTrackIndex);
+        try {
+            mInputFormat = mExtractor.getTrackFormat(mTrackIndex);
+        } catch (Exception e) {
+            mInputFormat = MediaFormat.createAudioFormat("audio/mp3", 1, 1);
+        }
     }
 
     @Override
     public void setup() {
-        mExtractor.selectTrack(mTrackIndex);
+        if (mTrackIndex == -1) {
+            mExtractor.selectTrack(0);
+        } else {
+            mExtractor.selectTrack(mTrackIndex);
+        }
+
         try {
             mEncoder = MediaCodec.createEncoderByType(mOutputFormat.getString(MediaFormat.KEY_MIME));
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
+            mEncoder.configure(mOutputFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            mEncoder.start();
+            mEncoderStarted = true;
+            mEncoderBuffers = new MediaCodecBufferCompatWrapper(mEncoder);
+        } catch (Exception e) {
+            return;
         }
-        mEncoder.configure(mOutputFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        mEncoder.start();
-        mEncoderStarted = true;
-        mEncoderBuffers = new MediaCodecBufferCompatWrapper(mEncoder);
 
         final MediaFormat inputFormat = mExtractor.getTrackFormat(mTrackIndex);
         try {
@@ -94,93 +103,109 @@ public class AudioTrackTranscoder implements TrackTranscoder {
             // NOTE: not repeating to keep from deadlock when encoder is full.
         } while (status == DRAIN_STATE_SHOULD_RETRY_IMMEDIATELY);
 
-        while (mAudioChannel.feedEncoder(0)) busy = true;
-        while (drainExtractor(0) != DRAIN_STATE_NONE) busy = true;
+        try {
+            while (mAudioChannel.feedEncoder(0)) busy = true;
+            while (drainExtractor(0) != DRAIN_STATE_NONE) busy = true;
 
-        return busy;
+            return busy;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private int drainExtractor(long timeoutUs) {
-        if (mIsExtractorEOS) return DRAIN_STATE_NONE;
-        int trackIndex = mExtractor.getSampleTrackIndex();
-        if (trackIndex >= 0 && trackIndex != mTrackIndex) {
-            return DRAIN_STATE_NONE;
-        }
+        try {
+            if (mIsExtractorEOS) return DRAIN_STATE_NONE;
+            int trackIndex = mExtractor.getSampleTrackIndex();
+            if (trackIndex >= 0 && trackIndex != mTrackIndex) {
+                return DRAIN_STATE_NONE;
+            }
 
-        final int result = mDecoder.dequeueInputBuffer(timeoutUs);
-        if (result < 0) return DRAIN_STATE_NONE;
-        if (trackIndex < 0) {
-            mIsExtractorEOS = true;
-            mDecoder.queueInputBuffer(result, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-            return DRAIN_STATE_NONE;
-        }
+            final int result = mDecoder.dequeueInputBuffer(timeoutUs);
+            if (result < 0) return DRAIN_STATE_NONE;
+            if (trackIndex < 0) {
+                mIsExtractorEOS = true;
+                mDecoder.queueInputBuffer(result, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                return DRAIN_STATE_NONE;
+            }
 
-        final int sampleSize = mExtractor.readSampleData(mDecoderBuffers.getInputBuffer(result), 0);
-        final boolean isKeyFrame = (mExtractor.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0;
-        mDecoder.queueInputBuffer(result, 0, sampleSize, mExtractor.getSampleTime(), isKeyFrame ? MediaCodec.BUFFER_FLAG_SYNC_FRAME : 0);
-        mExtractor.advance();
-        return DRAIN_STATE_CONSUMED;
+            final int sampleSize = mExtractor.readSampleData(mDecoderBuffers.getInputBuffer(result), 0);
+            final boolean isKeyFrame = (mExtractor.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0;
+            mDecoder.queueInputBuffer(result, 0, sampleSize, mExtractor.getSampleTime(), isKeyFrame ? MediaCodec.BUFFER_FLAG_SYNC_FRAME : 0);
+            mExtractor.advance();
+            return DRAIN_STATE_CONSUMED;
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     private int drainDecoder(long timeoutUs) {
-        if (mIsDecoderEOS) return DRAIN_STATE_NONE;
+        try {
+            if (mIsDecoderEOS) return DRAIN_STATE_NONE;
 
-        int result = mDecoder.dequeueOutputBuffer(mBufferInfo, timeoutUs);
-        switch (result) {
-            case MediaCodec.INFO_TRY_AGAIN_LATER:
-                return DRAIN_STATE_NONE;
-            case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
-                mAudioChannel.setActualDecodedFormat(mDecoder.getOutputFormat());
-            case MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED:
-                return DRAIN_STATE_SHOULD_RETRY_IMMEDIATELY;
+            int result = mDecoder.dequeueOutputBuffer(mBufferInfo, timeoutUs);
+            switch (result) {
+                case MediaCodec.INFO_TRY_AGAIN_LATER:
+                    return DRAIN_STATE_NONE;
+                case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
+                    mAudioChannel.setActualDecodedFormat(mDecoder.getOutputFormat());
+                case MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED:
+                    return DRAIN_STATE_SHOULD_RETRY_IMMEDIATELY;
+            }
+
+            if ((mBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                mIsDecoderEOS = true;
+                mAudioChannel.drainDecoderBufferAndQueue(AudioChannel.BUFFER_INDEX_END_OF_STREAM, 0);
+            } else if (mBufferInfo.size > 0) {
+                mAudioChannel.drainDecoderBufferAndQueue(result, mBufferInfo.presentationTimeUs);
+            }
+
+            return DRAIN_STATE_CONSUMED;
+        } catch (Exception e) {
+            return 0;
         }
-
-        if ((mBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-            mIsDecoderEOS = true;
-            mAudioChannel.drainDecoderBufferAndQueue(AudioChannel.BUFFER_INDEX_END_OF_STREAM, 0);
-        } else if (mBufferInfo.size > 0) {
-            mAudioChannel.drainDecoderBufferAndQueue(result, mBufferInfo.presentationTimeUs);
-        }
-
-        return DRAIN_STATE_CONSUMED;
     }
 
     private int drainEncoder(long timeoutUs) {
-        if (mIsEncoderEOS) return DRAIN_STATE_NONE;
+        try {
+            if (mIsEncoderEOS) return DRAIN_STATE_NONE;
 
-        int result = mEncoder.dequeueOutputBuffer(mBufferInfo, timeoutUs);
-        switch (result) {
-            case MediaCodec.INFO_TRY_AGAIN_LATER:
-                return DRAIN_STATE_NONE;
-            case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
-                if (mActualOutputFormat != null) {
-                    throw new RuntimeException("Audio output format changed twice.");
-                }
-                mActualOutputFormat = mEncoder.getOutputFormat();
-                mMuxer.setOutputFormat(SAMPLE_TYPE, mActualOutputFormat);
+            int result = mEncoder.dequeueOutputBuffer(mBufferInfo, timeoutUs);
+            switch (result) {
+                case MediaCodec.INFO_TRY_AGAIN_LATER:
+                    return DRAIN_STATE_NONE;
+                case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
+                    if (mActualOutputFormat != null) {
+                        throw new RuntimeException("Audio output format changed twice.");
+                    }
+                    mActualOutputFormat = mEncoder.getOutputFormat();
+                    mMuxer.setOutputFormat(SAMPLE_TYPE, mActualOutputFormat);
+                    return DRAIN_STATE_SHOULD_RETRY_IMMEDIATELY;
+                case MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED:
+                    mEncoderBuffers = new MediaCodecBufferCompatWrapper(mEncoder);
+                    return DRAIN_STATE_SHOULD_RETRY_IMMEDIATELY;
+            }
+
+            if (mActualOutputFormat == null) {
+                throw new RuntimeException("Could not determine actual output format.");
+            }
+
+            if ((mBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                mIsEncoderEOS = true;
+                mBufferInfo.set(0, 0, 0, mBufferInfo.flags);
+            }
+            if ((mBufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                // SPS or PPS, which should be passed by MediaFormat.
+                mEncoder.releaseOutputBuffer(result, false);
                 return DRAIN_STATE_SHOULD_RETRY_IMMEDIATELY;
-            case MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED:
-                mEncoderBuffers = new MediaCodecBufferCompatWrapper(mEncoder);
-                return DRAIN_STATE_SHOULD_RETRY_IMMEDIATELY;
-        }
-
-        if (mActualOutputFormat == null) {
-            throw new RuntimeException("Could not determine actual output format.");
-        }
-
-        if ((mBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-            mIsEncoderEOS = true;
-            mBufferInfo.set(0, 0, 0, mBufferInfo.flags);
-        }
-        if ((mBufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-            // SPS or PPS, which should be passed by MediaFormat.
+            }
+            mMuxer.writeSampleData(SAMPLE_TYPE, mEncoderBuffers.getOutputBuffer(result), mBufferInfo);
+            mWrittenPresentationTimeUs = mBufferInfo.presentationTimeUs;
             mEncoder.releaseOutputBuffer(result, false);
-            return DRAIN_STATE_SHOULD_RETRY_IMMEDIATELY;
+            return DRAIN_STATE_CONSUMED;
+        } catch (Exception e) {
+            return 0;
         }
-        mMuxer.writeSampleData(SAMPLE_TYPE, mEncoderBuffers.getOutputBuffer(result), mBufferInfo);
-        mWrittenPresentationTimeUs = mBufferInfo.presentationTimeUs;
-        mEncoder.releaseOutputBuffer(result, false);
-        return DRAIN_STATE_CONSUMED;
     }
 
     @Override
