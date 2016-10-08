@@ -82,7 +82,7 @@ public class AndroidStandardFormatStrategy implements MediaFormatStrategy {
         }
 
         if (longer * 9 != shorter * 16) {
-            throw new OutputFormatUnavailableException("This video is not 16:9, and is not able to transcode. (" + width + "x" + height + ")");
+            throw new OutputFormatUnavailableException("This video already seems processed (not 16:9)");
         }
 
         if (shorter <= shorterLength) {
@@ -101,6 +101,10 @@ public class AndroidStandardFormatStrategy implements MediaFormatStrategy {
 
     @Override
     public MediaFormat createAudioOutputFormat(MediaFormat inputFormat) {
+        if (inputFormat == null) {
+            return null;
+        }
+
         final MediaFormat format = MediaFormat.createAudioFormat(MediaFormatExtraConstants.MIMETYPE_AUDIO_AAC,
                 inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE), audioChannels);
         format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);

@@ -55,7 +55,7 @@ public class MediaExtractorUtils {
             }
             if (trackResult.mVideoTrackIndex >= 0 && trackResult.mAudioTrackIndex >= 0) break;
         }
-        if (trackResult.mVideoTrackIndex < 0 || trackResult.mAudioTrackIndex < 0) {
+        if (trackResult.mVideoTrackIndex < 0 && trackResult.mAudioTrackIndex < 0) {
             throw new IllegalArgumentException("extractor does not contain video and/or audio tracks.");
         }
         return trackResult;

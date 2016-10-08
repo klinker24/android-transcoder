@@ -116,7 +116,7 @@ public class TranscoderActivity extends Activity {
                     };
                     Log.d(TAG, "transcoding into " + file);
                     mFuture = MediaTranscoder.getInstance().transcodeVideo(fileDescriptor, file.getAbsolutePath(),
-                            MediaFormatStrategyPresets.createPreserveAspectRatioStrategy(AndroidStandardFormatStrategy.Encoding.SD_HIGH), listener);
+                            MediaFormatStrategyPresets.createStandardFormatStrategy(AndroidStandardFormatStrategy.Encoding.SD_HIGH), listener);
                     switchButtonEnabled(true);
                 }
                 break;
