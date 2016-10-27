@@ -59,7 +59,7 @@ See `TranscoderActivity.java` in example directory for ready-made transcoder app
 ### Gradle
 
 ```groovy
-compile 'com.klinkerapps:android-transcoder:1.0.1'
+compile 'com.klinkerapps:android-transcoder:1.0.2'
 ```
 
 ## Note (PLEASE READ FIRST)
